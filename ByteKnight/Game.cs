@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -16,12 +16,18 @@ namespace ByteKnight
         private bool esquerda, direita;
         private int velocidadeY = 0;
         private readonly System.Windows.Forms.Timer relogio = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer timerDisparos = new System.Windows.Forms.Timer();
 
         private readonly List<PictureBox> moedas = new List<PictureBox>();
         private readonly Random sorteio = new Random();
         private Image imagemMoeda = null!;
         private Label lblPontos = null!;
         private int pontos = 0;
+        private int inimigosDerrotados = 0;
+        private Label lblCombate = null!;
+        private long ultimoDisparoMs = -10000;
+        private readonly System.Diagnostics.Stopwatch tempoJogo = System.Diagnostics.Stopwatch.StartNew();
+        private const int IntervaloDisparoMs = 280;
 
         // NOVO: inimigos, vidas e tela de Game Over
         private readonly List<PictureBox> inimigos = new List<PictureBox>();
@@ -51,6 +57,9 @@ namespace ByteKnight
             DoubleBuffered = true;
             KeyDown += Game_KeyDown;
             KeyUp += Game_KeyUp;
+            timerDisparos.Interval = 100;
+            timerDisparos.Enabled = true;
+            timerDisparos.Tick += Timer_Tick;
         }
 
         private void Game_Load(object sender, EventArgs e)
@@ -87,6 +96,15 @@ namespace ByteKnight
             lblVidas.Location = new Point(30, 80);
             lblVidas.Text = "VIDAS: " + vidas;
             Controls.Add(lblVidas);
+
+            lblCombate = new Label();
+            lblCombate.AutoSize = true;
+            lblCombate.BackColor = Color.Transparent;
+            lblCombate.ForeColor = Color.White;
+            lblCombate.Font = new Font("Impact", 24F);
+            lblCombate.Location = new Point(30, 145);
+            lblCombate.Text = "INIMIGOS: 0";
+            Controls.Add(lblCombate);
 
             for (int i = 0; i < QuantidadeMoedas; i++)
             {
@@ -154,7 +172,7 @@ namespace ByteKnight
             moeda.BackColor = Color.Transparent;
             moeda.Image = imagemMoeda;
 
-            int x = sorteio.Next(300, ClientSize.Width - 100);
+            int x = sorteio.Next(Math.Min(300, Math.Max(0, ClientSize.Width - 100)), Math.Max(301, ClientSize.Width - 100));
             int y = chaoY - sorteio.Next(60, 330);
             moeda.Location = new Point(x, y);
 
@@ -187,10 +205,22 @@ namespace ByteKnight
                 return;
             }
 
-            if (e.KeyCode == Keys.Left || e.KeyCode == Keys.A) esquerda = true;
-            if (e.KeyCode == Keys.Right || e.KeyCode == Keys.D) direita = true;
+            if (e.KeyCode == Keys.Left || e.KeyCode == Keys.A) { esquerda = true; jogador.OlharPara(-1); }
+            if (e.KeyCode == Keys.Right || e.KeyCode == Keys.D) { direita = true; jogador.OlharPara(1); }
 
-            if ((e.KeyCode == Keys.Space || e.KeyCode == Keys.Up || e.KeyCode == Keys.W) && NoChao())
+            if (e.KeyCode == Keys.Space)
+            {
+                if (tempoJogo.ElapsedMilliseconds - ultimoDisparoMs >= IntervaloDisparoMs)
+                {
+                    ultimoDisparoMs = tempoJogo.ElapsedMilliseconds;
+                    Bullet bala = jogador.Atirar();
+                    Controls.Add(bala);
+                    bala.BringToFront();
+                }
+                e.SuppressKeyPress = true;
+            }
+
+            if ((e.KeyCode == Keys.Up || e.KeyCode == Keys.W) && NoChao())
                 velocidadeY = ForcaPulo;
         }
 
@@ -198,6 +228,38 @@ namespace ByteKnight
         {
             if (e.KeyCode == Keys.Left || e.KeyCode == Keys.A) esquerda = false;
             if (e.KeyCode == Keys.Right || e.KeyCode == Keys.D) direita = false;
+        }
+
+        private void Timer_Tick(object? sender, EventArgs e)
+        {
+            if (fimDeJogo || jogador == null) return;
+
+            for (int i = jogador.balas.Count - 1; i >= 0; i--)
+            {
+                Bullet bala = jogador.balas[i];
+                bala.Mover();
+
+                bool atingiuInimigo = false;
+                for (int j = inimigos.Count - 1; j >= 0; j--)
+                {
+                    Rectangle hitInimigo = Rectangle.Inflate(inimigos[j].Bounds, -4, -4);
+                    if (bala.Bounds.IntersectsWith(hitInimigo))
+                    {
+                        RemoverInimigo(j);
+                        inimigosDerrotados++;
+                        lblCombate.Text = "INIMIGOS: " + inimigosDerrotados;
+                        atingiuInimigo = true;
+                        break;
+                    }
+                }
+
+                if (atingiuInimigo || bala.SaiuDaTela())
+                {
+                    Controls.Remove(bala);
+                    jogador.balas.RemoveAt(i);
+                    bala.Dispose();
+                }
+            }
         }
 
         private bool NoChao()
@@ -318,11 +380,12 @@ namespace ByteKnight
         {
             fimDeJogo = true;
             relogio.Stop();
+            timerDisparos.Stop();
             esquerda = false;
             direita = false;
             jogador.Visible = true;
 
-            lblResultado.Text = "Você coletou " + pontos + " bits";
+            lblResultado.Text = "BITS: " + pontos + "  |  INIMIGOS: " + inimigosDerrotados;
 
             lblGameOver.Left = (ClientSize.Width - lblGameOver.Width) / 2;
             lblGameOver.Top = ClientSize.Height / 5;
@@ -350,6 +413,14 @@ namespace ByteKnight
 
         private void ReiniciarJogo()
         {
+            // Remove os disparos antigos antes de reiniciar
+            foreach (Bullet bala in jogador.balas)
+            {
+                Controls.Remove(bala);
+                bala.Dispose();
+            }
+            jogador.balas.Clear();
+
             // Remove todos os bugs da tela
             foreach (PictureBox inimigo in inimigos)
             {
@@ -360,6 +431,10 @@ namespace ByteKnight
 
             // Zera o estado
             pontos = 0;
+            inimigosDerrotados = 0;
+            ultimoDisparoMs = -10000;
+            esquerda = false;
+            direita = false;
             vidas = VidasIniciais;
             invencivel = 0;
             velocidadeY = 0;
@@ -368,6 +443,7 @@ namespace ByteKnight
 
             lblPontos.Text = "BITS: 0";
             lblVidas.Text = "VIDAS: " + vidas;
+            lblCombate.Text = "INIMIGOS: 0";
 
             jogador.Visible = true;
             jogador.Location = new Point(100, chaoY - jogador.Height);
@@ -380,6 +456,7 @@ namespace ByteKnight
             ActiveControl = null;
 
             relogio.Start();
+            timerDisparos.Start();
         }
     }
 }
